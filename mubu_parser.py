@@ -8,7 +8,7 @@ from lxml import etree
 from pathlib import Path
 import datetime
 
-from lib.opml_processor import Outline
+from lib.opml_processor import OPML, Head, Body, Outline, Generator
 
 
 class MubuPost:
@@ -58,6 +58,12 @@ class MubuPost:
         else:
             return self.created_time
 
+    def _is_code_span(self, element):
+        attrs = self._get_element_attributes(element)
+        if 'class' in attrs and attrs['class'] == 'codespan':
+            return True
+        return False
+
     def _elements_to_outlines(self, element_children):
         ret = []
         for e in element_children:
@@ -68,16 +74,12 @@ class MubuPost:
             h_n = heading_r.findall(class_name)
             content_spans = e.xpath('div[@class="content mm-editor"]')[0].xpath('span')
             content = ''
-            if len(content_spans) == 1:
-                content = content_spans[0].text
-            else:
-                # may be ` ` code style
-                for s in content_spans:
-                    attrs = self._get_element_attributes(s)
-                    if 'class' in attrs and attrs['class'] == 'codespan':
-                        content += f'`{s.text}`'
-                    else:
-                        content += s.text
+            # may be ` ` code style
+            for s in content_spans:
+                if self._is_code_span(s):
+                    content += f'`{s.text}`'
+                else:
+                    content += s.text
             outline_attrs = {}
             # mubu image
             if self.use_mubu_img:
@@ -85,27 +87,55 @@ class MubuPost:
                 nullable_image_list = None
                 if nullable_image_list_arr and len(nullable_image_list_arr) > 0:
                     nullable_image_list = nullable_image_list_arr[0]
-                if nullable_image_list:
+                if nullable_image_list is not None:
                     img_list_arr = nullable_image_list.xpath('li[@class="image-item"]')
                     if img_list_arr and len(img_list_arr) > 0:
                         img_arr = []
                         for img_li in img_list_arr:
                             img_arr.append(img_li.xpath('img[@src]')[0].attrib['src'])
                         outline_attrs['mubu_imgs'] = img_arr
+            # parse note div ----- START
+            mkd_images = []
+            mkd_codes = []
             nullable_note_content = e.xpath('div[@class="note mm-editor"]')
             if len(nullable_note_content) > 0:
                 content += '\n'
-                maybe_img_or_code = nullable_note_content[0].xpath('span')[0].text
-                # user type image
-                # TODO multi user type images
-                if maybe_img_or_code == '![](':
-                    img_url = maybe_img_or_code + nullable_note_content[0].xpath('a[@href]')[0].attrib['href']
-                    outline_attrs['mkd_img'] = img_url
-                else:
-                    large_code_r = re.compile(r'```(.|\n)*```')
-                    maybe_code_hit = large_code_r.match(maybe_img_or_code)
-                    if maybe_code_hit:
-                        outline_attrs['large_code'] = maybe_img_or_code
+                img_token_re = re.compile(r'.*\!\[.*\]\(')
+                code_token_re = re.compile(r'```(.|\n)+```')
+                maybe_img_or_code = nullable_note_content[0].xpath('*')
+                if maybe_img_or_code and len(maybe_img_or_code) > 0:
+                    index_in_elements = 0
+                    while len(maybe_img_or_code) > index_in_elements:
+                        element = maybe_img_or_code[index_in_elements]
+                        element_tag = self._get_element_tag(element)
+                        element_text = self._get_element_text(element)
+                        if element_text:
+                            if element_text.startswith('\n'):
+                                element_text = element_text[1:].strip()
+                            elif len(element_text) > 1 and element_text.strip()[1] == '\n':
+                                # I cant explain this, but it works, this \n is U+200B, encode error
+                                element_text = element_text[2:].strip()
+                        if element_tag == 'span':
+                            if len(img_token_re.findall(element_text)) > 0:
+                                # it's a image
+                                img_url = element_text + \
+                                          maybe_img_or_code[index_in_elements + 1].attrib['href'].rstrip('\n')
+                                mkd_images.append(img_url)
+                                index_in_elements += 2
+                            elif len(code_token_re.findall(element_text)) > 0:
+                                # it's a code
+                                mkd_codes.append(element_text)
+                                index_in_elements += 1
+                            else:
+                                raise SyntaxError('Wrong token match, now only support markdown code and image style.')
+                        else:
+                            raise SyntaxError(f'what kind of tag beside "span" will appear at here? error code=118.'
+                                              f'--->tag:{element_tag}, text:{element_text} at line:{self._get_element_source_line(element)}')
+                if len(mkd_images) > 0:
+                    outline_attrs['mkd_imgs'] = mkd_images
+                if len(mkd_codes) > 0:
+                    outline_attrs['mkd_codes'] = mkd_codes
+            # parse note div ----- END
             if h_n and len(h_n) == 1:
                 content = (int(h_n[0]) * '#') + ' ' + content
             o = Outline(content, attrs=outline_attrs)
@@ -116,7 +146,7 @@ class MubuPost:
             ret.append(o)
         return ret
 
-    def parse(self):
+    def parse_to_opml(self):
         # <div class="title"> user input text </div>
         title = self._get_element_text(self.dom.xpath('//div[@class="title"]')[0])
         assert title
@@ -128,11 +158,16 @@ class MubuPost:
         if not node_list_xp or len(node_list_xp) != 1:
             raise SyntaxError('Find node-list error, please check the output html. -35')
         root_element = node_list_xp[0]
-        root = Outline('Stub')
+        outlines_holder = Outline('Stub')
         for c in self._elements_to_outlines(root_element.xpath('li')):
-            root.append_child(c)
-        return root
+            outlines_holder.append_child(c)
+        head = Head(title, create_date=self.created_time, modified_date=self.modified_time)
+        body = Body(outlines_holder.sub_outlines)
+        return OPML(head, body)
 
 
 if __name__ == '__main__':
+    # p = MubuPost('<your html exported by MUBU>', use_mubu_img=True)
+    # opml = p.parse_to_opml()
+    # Generator(opml, 'test_blog').write('.')
     pass
