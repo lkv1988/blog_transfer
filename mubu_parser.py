@@ -64,6 +64,23 @@ class MubuPost:
             return True
         return False
 
+    @staticmethod
+    def _append_content_with_class(text, class_name):
+        if not class_name:
+            return text
+        if class_name == 'codespan':
+            return f'`{text}`'
+        elif class_name == 'bold':
+            return f'**{text}**'
+        elif class_name == 'italic':
+            return f'*{text}*'
+        elif class_name == 'strikethrough':
+            return f'~~{text}~~'
+        elif 'italic' in class_name and 'bold' in class_name:
+            return f'***{text}***'
+        else:
+            return text
+
     def _elements_to_outlines(self, element_children):
         ret = []
         for e in element_children:
@@ -72,14 +89,30 @@ class MubuPost:
             assert is_normal_node
             heading_r = re.compile(r'heading(\d)')
             h_n = heading_r.findall(class_name)
-            content_spans = e.xpath('div[@class="content mm-editor"]')[0].xpath('span')
+            content_editor = e.xpath('div[@class="content mm-editor"]')[0]
             content = ''
-            # may be ` ` code style
-            for s in content_spans:
-                if self._is_code_span(s):
-                    content += f'`{s.text}`'
-                else:
-                    content += s.text
+            if content_editor is not None and len(content_editor) > 0:
+                skip_first_one = True
+                iterated_elts = set()
+                for sub in content_editor.iter():
+                    if skip_first_one:
+                        skip_first_one = False
+                        continue
+                    if sub in iterated_elts:
+                        continue
+                    iterated_elts.add(sub)
+                    class_name = sub.attrib['class'] if 'class' in sub.attrib else None
+                    text = sub.text
+                    if class_name is not None and class_name == 'content-link':
+                        link_text = sub.xpath('*[contains(@class, "content-link-text")]')[0]
+                        iterated_elts.add(link_text)
+                        # print(f'Link text: {link_text.text}')
+                        link_mkd = f'[{link_text.text}]({sub.attrib["href"]})'
+                        content += link_mkd
+                    elif text is not None:
+                        content += self._append_content_with_class(text, class_name)
+                    else:
+                        raise RuntimeError("text is None, -112")
             outline_attrs = {}
             # mubu image
             if self.use_mubu_img:
