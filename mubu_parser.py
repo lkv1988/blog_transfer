@@ -70,7 +70,7 @@ class Transformer:
                 # TODO make multiline codes show better, now need to be adjusted by manual
                 for code in mkd_multiline_codes:
                     simple_text += f'\n{code}'
-        if simple_text.startswith('>'):
+        if simple_text.startswith('> '):
             simple_text += '\n'
         content_holder.append(simple_text)
         if outline.sub_outlines and len(outline.sub_outlines) > 0:
