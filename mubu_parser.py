@@ -1,14 +1,94 @@
 """
 http://xpather.com/
 """
+import datetime
 import os
 import re
+from pathlib import Path
 
 from lxml import etree
-from pathlib import Path
-import datetime
 
-from lib.opml_processor import OPML, Head, Body, Outline, Generator
+from lib.opml_processor import OPML, Head, Body, Outline
+
+"""
+Roadmap:
+1. auto insert dot before sub-outline
+2. make multiline code show better
+"""
+
+
+class Transformer:
+    def __init__(self, source: OPML):
+        self.source = source
+
+    @staticmethod
+    def _split_py_array_str_to_array(arr_str):
+        if type(arr_str) is list:
+            return arr_str
+        array_str_re = re.compile(r'\[(.*)\]')
+        array_item_re = re.compile(r"\'(.*?)\'")
+        found = array_str_re.findall(arr_str)
+        if not found or len(found) > 1:
+            raise SyntaxError('in this usage, the input string should be a array __str__ output, or I should make '
+                              'this method more robust')
+        return array_item_re.findall(found[0])
+
+    def _traversal_outline(self, outline, content_holder):
+        if not outline:
+            raise RuntimeError("UNLIKELY, nullable outline, -293")
+        simple_text = outline.text
+        """
+        handle some special markdown token:
+        1. mubu_imgs
+        2. mkd_imgs 
+        3. mkd_codes
+        verify the display in Typora
+        """
+        mubu_images, mkd_images, mkd_multiline_codes = None, None, None
+        nullable_markdown_attrs = outline.attrs
+        if nullable_markdown_attrs:
+            keys = nullable_markdown_attrs.keys()
+            if 'mubu_imgs' in keys:
+                mubu_images = nullable_markdown_attrs['mubu_imgs']
+            if 'mkd_imgs' in keys:
+                mkd_images = nullable_markdown_attrs['mkd_imgs']
+            if 'mkd_codes' in keys:
+                mkd_multiline_codes = nullable_markdown_attrs['mkd_codes']
+        if mubu_images:
+            mubu_images = self._split_py_array_str_to_array(mubu_images)
+            if mubu_images:
+                for mui in mubu_images:
+                    simple_text += f'![]({mui})'
+        if mkd_images:
+            mkd_images = self._split_py_array_str_to_array(mkd_images)
+            if mkd_images:
+                for mi in mkd_images:
+                    simple_text += f'\n{mi}'
+        if mkd_multiline_codes:
+            mkd_multiline_codes = self._split_py_array_str_to_array(mkd_multiline_codes)
+            if mkd_multiline_codes:
+                # TODO make multiline codes show better, now need to be adjusted by manual
+                for code in mkd_multiline_codes:
+                    simple_text += f'\n{code}'
+        if simple_text.startswith('>'):
+            simple_text += '\n'
+        content_holder.append(simple_text)
+        if outline.sub_outlines and len(outline.sub_outlines) > 0:
+            for o in outline.sub_outlines:
+                self._traversal_outline(o, content_holder)
+
+    def to_markdown(self, custom_file_name=None):
+        assert self.source.head and self.source.body
+        file_name = f'{self.source.head.title}.md'
+        if custom_file_name:
+            file_name = custom_file_name
+        lines = []
+        for o in self.source.body.outlines:
+            self._traversal_outline(o, lines)
+
+        with open(file_name, 'w', encoding='utf-8') as f:
+            for l in lines:
+                f.write(f'{l}\n')
 
 
 class MubuPost:
@@ -160,7 +240,15 @@ class MubuPost:
                                 mkd_codes.append(element_text)
                                 index_in_elements += 1
                             else:
-                                raise SyntaxError('Wrong token match, now only support markdown code and image style.')
+                                # normal text in note or something else?
+                                index_in_elements += 1
+                                content += f'>{element_text}'
+                        elif element_tag == 'a':
+                            # maybe a link
+                            assert element.attrib['class'] == 'content-link'
+                            link_url = element.attrib['href']
+                            content += f'{link_url}'
+                            index_in_elements += 1
                         else:
                             raise SyntaxError(f'what kind of tag beside "span" will appear at here? error code=118.'
                                               f'--->tag:{element_tag}, text:{element_text} at line:{self._get_element_source_line(element)}')
@@ -198,9 +286,9 @@ class MubuPost:
         body = Body(outlines_holder.sub_outlines)
         return OPML(head, body)
 
+    def to_markdown(self, target_name=None):
+        Transformer(self.parse_to_opml()).to_markdown(target_name)
+
 
 if __name__ == '__main__':
-    # p = MubuPost('<your html exported by MUBU>', use_mubu_img=True)
-    # opml = p.parse_to_opml()
-    # Generator(opml, 'test_blog').write('.')
-    pass
+    MubuPost(output_html_path='/Users/kevin/Downloads/20211026 如何定位下一帧刷新完成的准确时间.html', use_mubu_img=True).to_markdown()

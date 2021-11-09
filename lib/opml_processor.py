@@ -153,7 +153,7 @@ class OPML(Element):
     def my_tag(self):
         return 'opml'
 
-    def __init__(self, head: Element, body: Element):
+    def __init__(self, head: Head, body: Body):
         assert head
         assert body
         self.head = head
