@@ -291,4 +291,4 @@ class MubuPost:
 
 
 if __name__ == '__main__':
-    MubuPost(output_html_path='/Users/kevin/Downloads/20211026 如何定位下一帧刷新完成的准确时间.html', use_mubu_img=True).to_markdown()
+    pass
